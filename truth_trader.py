@@ -133,7 +133,7 @@ class RateLimit(Exception):
     stop=stop_after_attempt(4),
     retry=retry_if_exception_type((httpx.HTTPError,))
 )
-def notify_pushover(title: str, message: str) -> None:
+def notify_pushover(title: str, message: str, priority: int = 0) -> None:
     with httpx.Client(timeout=15) as http:
         r = http.post(
             "https://api.pushover.net/1/messages.json",
@@ -142,10 +142,11 @@ def notify_pushover(title: str, message: str) -> None:
                 "user": PUSHOVER_USER,
                 "title": title[:250],
                 "message": message[:1024],
-                "priority": 0,
+                "priority": int(priority),  # -2..2 per Pushover
             },
         )
         r.raise_for_status()
+
 
 # ------------------------- Utilities -------------------------
 
@@ -425,12 +426,14 @@ def analyze_and_notify_single_post(st: dict) -> None:
     print("[openai] analysis complete")
 
     msg = summarize_trade(decision)
-    title = "TruthTrader — signal" if decision.get("tickers") else "TruthTrader — no trade"
+    has_signal = bool(decision.get("tickers"))
+    title = "TruthTrader — signal" if has_signal else "TruthTrader — no trade"
     try:
-        notify_pushover(title, f"{url}\n\n{msg}")
+        notify_pushover(title, f"{url}\n\n{msg}", priority=1 if has_signal else 0)
         print(f"Notified for {url}")
     except Exception as e:
         print(f"[notify] failed: {e}", file=sys.stderr)
+
 
 def poll_once(last_seen: Optional[str]) -> Tuple[Optional[str], List[Tuple[str, Dict[str, Any]]]]:
     decisions: List[Tuple[str, Dict[str, Any]]] = []
