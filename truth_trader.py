@@ -148,6 +148,25 @@ def notify_pushover(title: str, message: str) -> None:
         r.raise_for_status()
 
 # ------------------------- Utilities -------------------------
+
+def _strip_code_fences(s: str) -> str:
+    s = (s or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+    return s
+
+def _json_load_lenient(raw: str) -> dict:
+    txt = _strip_code_fences(raw)
+    try:
+        return json.loads(txt)
+    except Exception:
+        # last resort: grab the first {...} block
+        m = re.search(r"\{[\s\S]*\}", txt)
+        if m:
+            return json.loads(m.group(0))
+        raise
+
 # --- Debug logging ---
 def log_post_preview(url: str, created_at: str, content: str) -> None:
     preview = (content or "").strip().replace("\n", " ")
@@ -256,16 +275,18 @@ def _shape_to_json(model: str, assistant_text: str, whitelist: Optional[List[str
     )
     raw = r.output_text
     try:
-        data = json.loads(raw)
+        data = _json_load_lenient(raw)
     except Exception:
+        cleaned = _strip_code_fences(raw)
         data = {
-            "analysis": raw,
+            "analysis": cleaned[:500],  # keep it short if we must fall back
             "sentiment": "neutral",
             "confidence": 0.3,
             "tickers": [],
             "needs_search": False,
             "sources": [],
         }
+
     if whitelist:
         wl = set(t.upper() for t in whitelist)
         data["tickers"] = [t for t in data.get("tickers", []) if t.get("symbol", "").upper() in wl]
