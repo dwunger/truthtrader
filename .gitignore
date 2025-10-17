@@ -1,0 +1,17 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Envs / local state
+.venv/
+.env
+.truth_trader_state.json
+
+# Editors / OS
+*.log
+.DS_Store
+.idea/
+.vscode/
