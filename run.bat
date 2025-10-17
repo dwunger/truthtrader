@@ -16,7 +16,6 @@ if errorlevel 1 (
     exit /b 1
   )
   echo Re-checking Python...
-  rem A fresh PATH may need a new shell; try anyway:
   py -3.11 -V || (
     echo [ERROR] Python 3.11 was installed but isn't visible yet.
     echo Close this window, open a NEW command prompt, and run this .bat again.
@@ -55,7 +54,6 @@ if not exist ".venv\Scripts\python.exe" (
 
 echo.
 echo === Activating virtual environment ===
-rem Use CALL so the rest of this batch continues after activate
 call ".\.venv\Scripts\activate"
 if errorlevel 1 (
   echo [ERROR] Failed to activate venv.
@@ -93,13 +91,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo === Running truth_trader.py ===
-python truth_trader.py
+echo === Running main.py ===
+python main.py
 set EXITCODE=%ERRORLEVEL%
 
 echo.
 if %EXITCODE% NEQ 0 (
-  echo [ERROR] truth_trader.py exited with code %EXITCODE%.
+  echo [ERROR] main.py exited with code %EXITCODE%.
 ) else (
   echo Done.
 )
