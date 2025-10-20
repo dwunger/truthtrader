@@ -3,14 +3,14 @@ import os
 def get_config():
     return {
         # Models
-        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY"),
-        "MODEL": os.getenv("MODEL", "gpt-4o-mini"),
-        "REASONING_MODEL": os.getenv("REASONING_MODEL", "gpt-4o"),
+        "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY"),
+        "MODEL": os.getenv("MODEL", "claude-sonnet-4-5-20250929"),
+        "REASONING_MODEL": os.getenv("REASONING_MODEL", "claude-opus-4-20250514"),
         "REASONING_TRIGGER_CONF": float(os.getenv("REASONING_TRIGGER_CONF", "0.50")),
         "REASONING_FALLBACKS": [
-            os.getenv("REASONING_FALLBACK_1", "gpt-4o"),
-            os.getenv("REASONING_FALLBACK_2", "gpt-4.1-mini"),
-            os.getenv("REASONING_FALLBACK_3", "gpt-4o-mini"),
+            os.getenv("REASONING_FALLBACK_1", "claude-sonnet-4-20250514"),
+            os.getenv("REASONING_FALLBACK_2", "claude-sonnet-3-7-20250219"),
+            os.getenv("REASONING_FALLBACK_3", "claude-haiku-4-5-20251001"),
         ],
 
         # Truth Social
