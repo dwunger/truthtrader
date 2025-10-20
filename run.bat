@@ -83,7 +83,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-python -m pip install openai httpx python-dotenv tenacity
+python -m pip install openai anthropic httpx python-dotenv tenacity
 if errorlevel 1 (
   echo [ERROR] Installing dependencies failed.
   pause
