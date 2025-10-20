@@ -1,5 +1,6 @@
 import os, re, json
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
 from anthropic import Anthropic, BadRequestError
 
 def strip_html(s: str) -> str:
@@ -29,14 +30,34 @@ def summarize_trade(decision: Dict[str, Any]) -> str:
     ]
     tix = decision.get("tickers", []) or []
     if tix:
-        parts.append("\nSignals:")
+        parts.append("\n🎯 OPTIONS SIGNALS:")
         for t in tix:
-            parts.append(f"- {t.get('symbol','?')}: {t.get('action','HOLD')} — {t.get('rationale','')}")
+            action = t.get('action', 'HOLD')
+            symbol = t.get('symbol', '?')
+            strike = t.get('strike', '')
+            expiration = t.get('expiration', '')
+            entry = t.get('entry_timing', '')
+            exit_timing = t.get('exit_timing', '')
+            rationale = t.get('rationale', '')
+            
+            signal_line = f"- {symbol}: {action}"
+            if strike:
+                signal_line += f" @ ${strike}"
+            if expiration:
+                signal_line += f" ({expiration})"
+            parts.append(signal_line)
+            
+            if entry:
+                parts.append(f"  Entry: {entry}")
+            if exit_timing:
+                parts.append(f"  Exit: {exit_timing}")
+            if rationale:
+                parts.append(f"  {rationale}")
     else:
         parts.append("\nNo trade suggested.")
     srcs = decision.get("sources", []) or []
     if srcs:
-        parts.append("\nSources:")
+        parts.append("\n📚 Sources:")
         for s in srcs[:3]:
             parts.append(f"* {s.get('title','source')} — {s.get('url','')}")
     if decision.get("escalated"):
@@ -46,6 +67,99 @@ def summarize_trade(decision: Dict[str, Any]) -> str:
 def _system_msg():
     return ("You are a cautious finance research assistant. Use the built-in web_search tool only when needed. "
             "Never guarantee profit; prefer large-cap liquid tickers. Provide concise, explainable rationales.")
+
+def _taco_system_msg():
+    return """You are an expert options trader specializing in the "TACO" pattern (Trump Always Chickens Out).
+
+TACO PATTERN SUMMARY (Nov 2024 - Oct 2025):
+- Trump walked back 70-80% of major tariff threats
+- Typical reversal: 3-7 days after market crashes >3-5%
+- Liberation Day (April 2-9, 2025): S&P crashed -10% over 2 days, then surged +9.52% on walk-back
+- Largest crypto liquidation: Oct 10, 2025 - $19B after 100% China tariff threat
+
+HIGH WALK-BACK PROBABILITY SIGNALS:
+- Tariff rates ≥100% (rarely implemented as announced)
+- Allies targeted (Mexico, Canada, EU, Japan) vs China
+- Consumer goods mentioned (iPhones, toys, retail)
+- After-hours/weekend announcements
+- Language: "flexibility," "pause," "temporary," "90 days," "BE COOL," "GREAT TIME TO BUY"
+- Paradoxical: "no extensions" often means extensions coming
+
+LOW WALK-BACK PROBABILITY (Likely to Implement):
+- China specifically targeted (Trump maintains pressure)
+- "National security" framing (legal authority, harder to reverse)
+- Moderate rates ≤25%
+- Steel/aluminum/copper (sector-specific, domestic industry support)
+- Retaliation language
+
+YOUR TASK:
+1. Determine if this is a NEW tariff announcement or a WALK-BACK of a previous announcement
+2. Use web_search to check current S&P 500, VIX levels, and options chain activity
+3. Correlate with recent announcements from the provided context
+4. Generate OPTIONS-BASED trading signals (the real money is in options, not shares)
+
+CRITICAL: OPTIONS STRATEGY (Two-Leg Profit)
+
+**LEG 1 - THE DROP (PUTS): 200-500% GAINS**
+On tariff announcement with high walk-back probability:
+- BUY PUTS immediately (especially if after-hours)
+- Market crashes 3-5% next day → PUTS gain 200-500%
+- SELL PUTS at peak panic (VIX spike to 35-45)
+- Timeframe: 0-48 hours
+
+**LEG 2 - THE REBOUND (CALLS): 100-200% GAINS**
+On walk-back detection:
+- BUY CALLS immediately on "BE COOL" language
+- Market surges 7-10% within hours → CALLS gain 100-200%
+- SELL CALLS same day (theta decay kills overnight holds)
+- Timeframe: 0-4 hours
+
+OPTIONS SPECIFICATIONS:
+- Use 0-7 DTE (Days To Expiration) for maximum gamma
+- SPY/QQQ options (most liquid)
+- Strike: Slightly OTM (Out of The Money) for leverage
+- PUTS: 2-3% below current for announcements
+- CALLS: 1-2% above current for walk-backs
+
+TRADING SIGNALS TO GENERATE:
+
+**BUY_PUTS** (Announcement with high walk-back probability):
+- Entry: IMMEDIATELY after announcement (before market open if after-hours)
+- Strike: Current price - 2-3%
+- Expiration: 3-7 days out
+- Exit: When VIX spikes above 35 OR market drops 4-5%
+- Priority: 2 (Emergency - time-sensitive)
+
+**BUY_CALLS** (Walk-back detected):
+- Entry: IMMEDIATELY (within minutes of "BE COOL" post)
+- Strike: Current price + 1-2%
+- Expiration: 0-2 days (minimize theta)
+- Exit: Same day when market surges 7-10%
+- Priority: 2 (Emergency - window closes in hours)
+
+**WATCH** (Moderate probability):
+- Monitor for market drop >3% or VIX spike
+- Set alerts but don't enter yet
+- Priority: 0
+
+**DEFENSIVE** (Low probability / China-targeted):
+- No PUTS (may actually implement)
+- Consider shares or avoid
+- Priority: 0
+
+SPEED IS EVERYTHING:
+- After-hours announcements → Position PUTS in pre-market
+- "BE COOL" posts → Execute CALLS within 15 minutes
+- Options decay fast (theta) - timing is critical
+- Set tight stops: -30% on PUTS, -20% on CALLS
+
+Use web_search to check:
+1. Current S&P 500 level and today's move
+2. Current VIX level (panic gauge)
+3. Recent options flow / unusual activity
+4. News about walk-back rumors
+
+Be decisive. If the pattern is clear, provide specific strikes and expirations. If uncertain, explain why."""
 
 def _used_web_search_from_response(response) -> bool:
     """Check if web search was used by looking for server_tool_use in content blocks"""
@@ -132,8 +246,10 @@ class Analyzer:
             model=model,
             max_tokens=2000,
             system="Return ONLY valid JSON with keys: analysis, sentiment, confidence (0-1), "
-                   "tickers (list of {symbol, action[BUY|SELL|HOLD], rationale}), needs_search (bool), "
-                   "sources (list of {title,url}). If no trade, tickers=[].",
+                   "tickers (list of {symbol, action[BUY_PUTS|BUY_CALLS|BUY|SELL|HOLD], strike (optional), "
+                   "expiration (optional, e.g. '3-7 DTE'), entry_timing (e.g. 'IMMEDIATE', 'PRE-MARKET'), "
+                   "exit_timing (e.g. 'VIX > 35', 'SAME DAY'), rationale}), needs_search (bool), "
+                   "sources (list of {title,url}), priority (0-2 integer). If no trade, tickers=[].",
             messages=[
                 {
                     "role": "user",
@@ -148,7 +264,7 @@ class Analyzer:
         except Exception:
             cleaned = _strip_code_fences(raw)
             data = {"analysis": cleaned[:500], "sentiment": "neutral", "confidence": 0.3,
-                    "tickers": [], "needs_search": False, "sources": []}
+                    "tickers": [], "needs_search": False, "sources": [], "priority": 0}
         
         if whitelist:
             wl = set(t.upper() for t in whitelist)
@@ -156,27 +272,77 @@ class Analyzer:
         
         return data
 
-    def analyze_post(self, content: str, url: str, created_at: str) -> Dict[str, Any]:
+    def _get_recent_taco_context(self, state) -> str:
+        """Build context of recent tariff announcements for Claude"""
+        recent = state.get("taco_recent_announcements", default=[])
+        if not recent:
+            return "No recent tariff announcements in context."
+        
+        context_lines = ["RECENT TARIFF ANNOUNCEMENTS (Last 30 days):"]
+        for entry in recent[-10:]:  # Last 10 announcements
+            date = entry.get("date", "unknown date")
+            summary = entry.get("summary", "")
+            context_lines.append(f"- {date}: {summary}")
+        
+        return "\n".join(context_lines)
+
+    def _update_taco_context(self, state, summary: str):
+        """Add this announcement to the rolling context"""
+        recent = state.get("taco_recent_announcements", default=[])
+        if not isinstance(recent, list):
+            recent = []
+        
+        # Add new entry
+        recent.append({
+            "date": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "summary": summary[:200]  # Keep it concise
+        })
+        
+        # Keep only last 30 days
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        recent = [
+            entry for entry in recent
+            if datetime.strptime(entry["date"].split()[0], "%Y-%m-%d") > cutoff
+        ]
+        
+        state.set(recent, "taco_recent_announcements")
+
+    def analyze_post(self, content: str, url: str, created_at: str, 
+                     taco_mode: bool = False, state=None) -> Dict[str, Any]:
         content = (content or "").strip()
         if not content:
             return {"analysis": "Media-only post (no text). No trade signal.",
                     "sentiment": "neutral", "confidence": 0.4,
-                    "tickers": [], "needs_search": False, "sources": []}
+                    "tickers": [], "needs_search": False, "sources": [], "priority": 0}
+
+        # Choose system message based on mode
+        sys_msg = _taco_system_msg() if taco_mode else _system_msg()
+        
+        # Build context for TACO mode
+        context_note = ""
+        if taco_mode and state:
+            context_note = f"\n\n{self._get_recent_taco_context(state)}"
 
         tools = self._web_search_tool_config()
-        print(f"[anthropic] request 1 → model={self.cfg['MODEL']} | tools={'web_search' if tools else 'none'} | url={url}")
+        print(f"[anthropic] request 1 → model={self.cfg['MODEL']} | taco_mode={taco_mode} | tools={'web_search' if tools else 'none'} | url={url}")
+        
+        prompt = f"Analyze this Truth Social post"
+        if taco_mode:
+            prompt = "TACO PATTERN ANALYSIS - Analyze this tariff-related post"
         
         r1 = self._messages_create_safe(
             model=self.cfg["MODEL"],
-            max_tokens=16384,
-            system=_system_msg(),
+            max_tokens=4096,
+            system=sys_msg,
             tools=tools if tools else None,
             messages=[
                 {
                     "role": "user",
-                    "content": f"Analyze this Truth Social post and decide if a trade is warranted.\n"
+                    "content": f"{prompt}.\n"
                                f"POST_URL: {url}\nCREATED_AT: {created_at}\nPOST_TEXT:\n{content}\n\n"
-                               "Return a short analysis. If you used web search, cite sources inline and list them."
+                               f"{'Use web search to check current S&P 500, VIX, and market conditions. ' if taco_mode else ''}"
+                               f"Return analysis with trade recommendations."
+                               f"{context_note}"
                 }
             ],
         )
@@ -193,22 +359,32 @@ class Analyzer:
             sorted(self.cfg["TICKER_WHITELIST"]) if self.cfg["TICKER_WHITELIST"] else None
         )
 
-        # Escalate to reasoning model if confidence is low
-        if decision.get("confidence", 0.0) < float(self.cfg["REASONING_TRIGGER_CONF"]):
+        # In TACO mode, update the rolling context
+        if taco_mode and state:
+            summary = f"{assistant_text[:150]}..." if len(assistant_text) > 150 else assistant_text
+            self._update_taco_context(state, summary)
+
+        # Escalate to reasoning model if confidence is low (but not for TACO IMMEDIATE_BUY signals)
+        should_escalate = decision.get("confidence", 0.0) < float(self.cfg["REASONING_TRIGGER_CONF"])
+        is_immediate_buy = taco_mode and decision.get("priority", 0) >= 2
+        
+        if should_escalate and not is_immediate_buy:
             tools2 = self._web_search_tool_config()
             print(f"[anthropic] request 2 (escalation) → model={self.cfg['REASONING_MODEL']} | tools={'web_search' if tools2 else 'none'} | url={url}")
             
             r2 = self._messages_create_safe(
                 model=self.cfg["REASONING_MODEL"],
-                max_tokens=16384,
-                system=_system_msg(),
+                max_tokens=4096,
+                system=sys_msg,
                 tools=tools2 if tools2 else None,
                 messages=[
                     {
                         "role": "user",
                         "content": f"Re-analyze with deeper reasoning and refine the trade decision.\n"
                                    f"POST_URL: {url}\nCREATED_AT: {created_at}\nPOST_TEXT:\n{content}\n"
-                                   "Return a short analysis; cite sources if you browse."
+                                   f"{'Check latest market data and TACO pattern history. ' if taco_mode else ''}"
+                                   f"Return analysis with trade recommendations."
+                                   f"{context_note}"
                     }
                 ],
             )
