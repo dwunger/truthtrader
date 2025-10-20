@@ -9,7 +9,7 @@ except Exception as e:
     tb = None
     print(f"[truthSocial] ERROR importing truthbrush: {e}", flush=True)
 
-VERSION = "truth_social/1.1.3"
+VERSION = "truth_social/1.1.4"
 print(f"[truthSocial] module file → {inspect.getfile(inspect.currentframe())}", flush=True)
 
 _CLOUDFLARE_STRINGS = ("Access denied | truthsocial.com used Cloudflare", "Error 1015")
@@ -60,6 +60,15 @@ class Monitor(Monitor):  # type: ignore[misc]
             self.publish_timeout_sec = int(os.getenv("PUBLISH_TIMEOUT_SEC", "25"))
         except Exception:
             self.publish_timeout_sec = 25
+
+        # Heartbeat controls:
+        # - TRUTH_SOCIAL_HEARTBEAT_SEC: cadence in seconds (default 0 = disabled)
+        # - TRUTH_SOCIAL_HEARTBEAT_PUSH: 1 to send pushover; 0 (default) for console-only logs
+        try:
+            self.heartbeat_sec = int(os.getenv("TRUTH_SOCIAL_HEARTBEAT_SEC", "0"))
+        except Exception:
+            self.heartbeat_sec = 0
+        self.heartbeat_push = os.getenv("TRUTH_SOCIAL_HEARTBEAT_PUSH", "0").strip() not in ("0", "", "false", "False")
 
     # ---- publish with timeout so we don't stall forever ----
     def _publish_with_timeout(self, evt: Event) -> bool:
@@ -144,11 +153,7 @@ class Monitor(Monitor):  # type: ignore[misc]
         last_seen: Optional[str] = self.state.get(self.state_key_last, default=None)
         print(f"[truthSocial] start; handle=@{self.handle} poll={self.poll_seconds}s last_seen={last_seen}", flush=True)
 
-        try:
-            heartbeat_sec = int(os.getenv("TRUTH_SOCIAL_HEARTBEAT_SEC", "600"))
-        except Exception:
-            heartbeat_sec = 600
-        next_heartbeat_ts = time.time() + max(0, heartbeat_sec)
+        next_heartbeat_ts = time.time() + max(0, self.heartbeat_sec) if self.heartbeat_sec > 0 else float("inf")
 
         # Bootstrap
         if not last_seen:
@@ -194,9 +199,10 @@ class Monitor(Monitor):  # type: ignore[misc]
                 else:
                     print(f"[truthSocial] poll tick — new=0 last_seen={last_seen}", flush=True)
 
+                # Heartbeat: console-only by default; no push unless explicitly enabled
                 now = time.time()
-                if heartbeat_sec > 0 and now >= next_heartbeat_ts:
-                    try:
+                if now >= next_heartbeat_ts:
+                    if self.heartbeat_push:
                         print("[truthSocial] heartbeat publish → begin", flush=True)
                         self._publish_with_timeout(Event(
                             source=self.name,
@@ -206,9 +212,9 @@ class Monitor(Monitor):  # type: ignore[misc]
                             payload={"analyze": False},
                         ))
                         print("[truthSocial] heartbeat publish → done", flush=True)
-                    except Exception as he:
-                        _safe_print_exc("heartbeat push error", he)
-                    next_heartbeat_ts = now + heartbeat_sec
+                    else:
+                        print(f"[truthSocial] heartbeat (console-only): alive; last_seen={last_seen}", flush=True)
+                    next_heartbeat_ts = now + max(5, self.heartbeat_sec) if self.heartbeat_sec > 0 else float("inf")
 
                 jitter = int(random.uniform(-max(5, self.poll_seconds // 8),
                                             max(5, self.poll_seconds // 8)))
