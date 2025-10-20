@@ -14,7 +14,7 @@ class Event:
     url: Optional[str] = None
     priority: int = 0
     created_at: Optional[str] = None
-    payload: Optional[Dict[str, Any]] = None  # e.g., {"text": "...", "analyze": True}
+    payload: Optional[Dict[str, Any]] = None  # e.g., {"text": "...", "analyze": True, "taco_mode": True}
 
 def make_publisher(cfg, state):
     analyzer = Analyzer(cfg, state.get("search_budget", default={}))
@@ -43,6 +43,7 @@ def make_publisher(cfg, state):
         payload = evt.payload or {}
         analyze_flag = payload.get("analyze", True)
         text = (payload.get("text") or "").strip()
+        taco_mode = payload.get("taco_mode", False)
         decision = None
 
         try:
@@ -51,9 +52,15 @@ def make_publisher(cfg, state):
                 decision = analyzer.analyze_post(
                     content=text,
                     url=evt.url or "",
-                    created_at=evt.created_at or ""
+                    created_at=evt.created_at or "",
+                    taco_mode=taco_mode,
+                    state=state if taco_mode else None  # Pass state for TACO context
                 )
-                if decision.get("tickers"):
+                
+                # Use Claude's priority if set (TACO mode)
+                if decision.get("priority") is not None:
+                    evt.priority = max(evt.priority, decision["priority"])
+                elif decision.get("tickers"):
                     evt.priority = max(evt.priority, 1)
 
             # Build final message
