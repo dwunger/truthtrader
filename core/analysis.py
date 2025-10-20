@@ -244,7 +244,7 @@ class Analyzer:
         
         r = self._messages_create_safe(
             model=model,
-            max_tokens=2000,
+            max_tokens=4096,
             system="Return ONLY valid JSON with keys: analysis, sentiment, confidence (0-1), "
                    "tickers (list of {symbol, action[BUY_PUTS|BUY_CALLS|BUY|SELL|HOLD], strike (optional), "
                    "expiration (optional, e.g. '3-7 DTE'), entry_timing (e.g. 'IMMEDIATE', 'PRE-MARKET'), "
@@ -332,7 +332,7 @@ class Analyzer:
         
         r1 = self._messages_create_safe(
             model=self.cfg["MODEL"],
-            max_tokens=4096,
+            max_tokens=16384,
             system=sys_msg,
             tools=tools if tools else None,
             messages=[
@@ -374,7 +374,7 @@ class Analyzer:
             
             r2 = self._messages_create_safe(
                 model=self.cfg["REASONING_MODEL"],
-                max_tokens=4096,
+                max_tokens=16384,
                 system=sys_msg,
                 tools=tools2 if tools2 else None,
                 messages=[
