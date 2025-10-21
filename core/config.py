@@ -18,6 +18,9 @@ def get_config():
 
         # Poll cadence
         "POLL_SECONDS": int(os.getenv("POLL_SECONDS", "90")),
+        
+        # Rate limit handling: Add delay between posts to avoid bursts
+        "POST_PROCESS_DELAY": float(os.getenv("POST_PROCESS_DELAY", "2.0")),  # 2 seconds between posts
 
         # Search budget
         "MAX_SEARCH_PER_DAY": int(os.getenv("MAX_SEARCH_CALLS_PER_DAY", "60")),
