@@ -71,6 +71,11 @@ def _system_msg():
 def _taco_system_msg():
     return """You are an expert options trader specializing in the "TACO" pattern (Trump Always Chickens Out).
 
+PUSHOVER PRIORITY LEVELS:
+- priority=2: EMERGENCY - Repeats every 30s until acknowledged (use for BUY_PUTS, BUY_CALLS)
+- priority=1: HIGH PRIORITY - Bypasses quiet hours, single alert (use for high-confidence trades)
+- priority=0: NORMAL - Standard notification (use for WATCH, low confidence)
+
 TACO PATTERN SUMMARY (Nov 2024 - Oct 2025):
 - Trump walked back 70-80% of major tariff threats
 - Typical reversal: 3-7 days after market crashes >3-5%
@@ -96,56 +101,44 @@ YOUR TASK:
 1. Determine if this is a NEW tariff announcement or a WALK-BACK of a previous announcement
 2. Use web_search to check current S&P 500, VIX levels, and options chain activity
 3. Correlate with recent announcements from the provided context
-4. Generate OPTIONS-BASED trading signals (the real money is in options, not shares)
 
-CRITICAL: OPTIONS STRATEGY (Two-Leg Profit)
+CRITICAL INSIGHT:
+**ALL tariff announcements cause market crashes, regardless of target country or walk-back probability.**
+The PUT trade is on the CRASH (happens immediately), not on the walk-back (happens 3-7 days later).
 
-**LEG 1 - THE DROP (PUTS): 200-500% GAINS**
-On tariff announcement with high walk-back probability:
-- BUY PUTS immediately (especially if after-hours)
-- Market crashes 3-5% next day → PUTS gain 200-500%
-- SELL PUTS at peak panic (VIX spike to 35-45)
-- Timeframe: 0-48 hours
-
-**LEG 2 - THE REBOUND (CALLS): 100-200% GAINS**
-On walk-back detection:
-- BUY CALLS immediately on "BE COOL" language
-- Market surges 7-10% within hours → CALLS gain 100-200%
-- SELL CALLS same day (theta decay kills overnight holds)
-- Timeframe: 0-4 hours
-
-OPTIONS SPECIFICATIONS:
-- Use 0-7 DTE (Days To Expiration) for maximum gamma
-- SPY/QQQ options (most liquid)
-- Strike: Slightly OTM (Out of The Money) for leverage
-- PUTS: 2-3% below current for announcements
-- CALLS: 1-2% above current for walk-backs
+China example: October 10, 2025 - Trump threatened China rare earth retaliation
+- Market: SPY -2.7%, Bitcoin -17%, $19B liquidations
+- PUTS: 200-500% profit in hours
+- Walk-back probability: Low (China-targeted)
+- BUT: Market crashed anyway = PUTS printed
 
 TRADING SIGNALS TO GENERATE:
 
-**BUY_PUTS** (Announcement with high walk-back probability):
+**BUY_PUTS** (ANY tariff announcement - immediate market crash):
 - Entry: IMMEDIATELY after announcement (before market open if after-hours)
 - Strike: Current price - 2-3%
 - Expiration: 3-7 days out
 - Exit: When VIX spikes above 35 OR market drops 4-5%
-- Priority: 2 (Emergency - time-sensitive)
+- Priority: 2 (EMERGENCY - repeats until acknowledged)
+- Applies to: ALL countries (EU, China, Mexico, Canada, Japan, etc.)
+- Reasoning: Market crashes first, walk-back comes later (if at all)
 
-**BUY_CALLS** (Walk-back detected):
+**BUY_CALLS** (Walk-back detected - immediate market surge):
 - Entry: IMMEDIATELY (within minutes of "BE COOL" post)
 - Strike: Current price + 1-2%
 - Expiration: 0-2 days (minimize theta)
 - Exit: Same day when market surges 7-10%
-- Priority: 2 (Emergency - window closes in hours)
+- Priority: 2 (EMERGENCY - repeats until acknowledged)
+- Signals: "BE COOL", "flexibility", "pause", "temporary", "90 days"
 
-**WATCH** (Moderate probability):
-- Monitor for market drop >3% or VIX spike
+**WATCH** (Moderate signals - unclear if announcement or walk-back):
+- Monitor for clarity on whether this is escalation or de-escalation
 - Set alerts but don't enter yet
-- Priority: 0
+- Priority: 0 (Normal notification)
 
-**DEFENSIVE** (Low probability / China-targeted):
-- No PUTS (may actually implement)
-- Consider shares or avoid
-- Priority: 0
+**DEFENSIVE** (Non-tariff content mistakenly flagged):
+- If post is NOT actually about tariffs despite screening
+- Priority: 0 (Normal notification)
 
 SPEED IS EVERYTHING:
 - After-hours announcements → Position PUTS in pre-market
@@ -249,7 +242,8 @@ class Analyzer:
                    "tickers (list of {symbol, action[BUY_PUTS|BUY_CALLS|BUY|SELL|HOLD], strike (optional), "
                    "expiration (optional, e.g. '3-7 DTE'), entry_timing (e.g. 'IMMEDIATE', 'PRE-MARKET'), "
                    "exit_timing (e.g. 'VIX > 35', 'SAME DAY'), rationale}), needs_search (bool), "
-                   "sources (list of {title,url}), priority (0-2 integer). If no trade, tickers=[].",
+                   "sources (list of {title,url}), priority (0, 1, or 2: 0=normal, 1=high, 2=emergency). "
+                   "If no trade, tickers=[].",
             messages=[
                 {
                     "role": "user",
@@ -315,8 +309,10 @@ class Analyzer:
                     "sentiment": "neutral", "confidence": 0.4,
                     "tickers": [], "needs_search": False, "sources": [], "priority": 0}
 
-        # Choose system message based on mode
+        # Choose system message and max_tokens based on mode
         sys_msg = _taco_system_msg() if taco_mode else _system_msg()
+        max_tokens_first = 16384 if taco_mode else 8192  # TACO needs more for options analysis
+        max_tokens_reasoning = 16384  # Always give reasoning model full capacity
         
         # Build context for TACO mode
         context_note = ""
@@ -330,22 +326,29 @@ class Analyzer:
         if taco_mode:
             prompt = "TACO PATTERN ANALYSIS - Analyze this tariff-related post"
         
-        r1 = self._messages_create_safe(
-            model=self.cfg["MODEL"],
-            max_tokens=16384,
-            system=sys_msg,
-            tools=tools if tools else None,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"{prompt}.\n"
-                               f"POST_URL: {url}\nCREATED_AT: {created_at}\nPOST_TEXT:\n{content}\n\n"
-                               f"{'Use web search to check current S&P 500, VIX, and market conditions. ' if taco_mode else ''}"
-                               f"Return analysis with trade recommendations."
-                               f"{context_note}"
-                }
-            ],
-        )
+        try:
+            r1 = self._messages_create_safe(
+                model=self.cfg["MODEL"],
+                max_tokens=max_tokens_first,
+                system=sys_msg,
+                tools=tools if tools else None,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": f"{prompt}.\n"
+                                   f"POST_URL: {url}\nCREATED_AT: {created_at}\nPOST_TEXT:\n{content}\n\n"
+                                   f"{'Use web search to check current S&P 500, VIX, and market conditions. ' if taco_mode else ''}"
+                                   f"Return analysis with trade recommendations."
+                                   f"{context_note}"
+                    }
+                ],
+            )
+        except Exception as e:
+            print(f"[anthropic] request 1 failed: {e}", flush=True)
+            # Return safe default on rate limit or other errors
+            return {"analysis": f"Analysis failed: {str(e)[:200]}",
+                    "sentiment": "neutral", "confidence": 0.0,
+                    "tickers": [], "needs_search": False, "sources": [], "priority": 0}
         
         used1 = _used_web_search_from_response(r1)
         print(f"[anthropic] request 1 done | web_used={bool(used1)}")
@@ -372,22 +375,27 @@ class Analyzer:
             tools2 = self._web_search_tool_config()
             print(f"[anthropic] request 2 (escalation) → model={self.cfg['REASONING_MODEL']} | tools={'web_search' if tools2 else 'none'} | url={url}")
             
-            r2 = self._messages_create_safe(
-                model=self.cfg["REASONING_MODEL"],
-                max_tokens=16384,
-                system=sys_msg,
-                tools=tools2 if tools2 else None,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"Re-analyze with deeper reasoning and refine the trade decision.\n"
-                                   f"POST_URL: {url}\nCREATED_AT: {created_at}\nPOST_TEXT:\n{content}\n"
-                                   f"{'Check latest market data and TACO pattern history. ' if taco_mode else ''}"
-                                   f"Return analysis with trade recommendations."
-                                   f"{context_note}"
-                    }
-                ],
-            )
+            try:
+                r2 = self._messages_create_safe(
+                    model=self.cfg["REASONING_MODEL"],
+                    max_tokens=max_tokens_reasoning,
+                    system=sys_msg,
+                    tools=tools2 if tools2 else None,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"Re-analyze with deeper reasoning and refine the trade decision.\n"
+                                       f"POST_URL: {url}\nCREATED_AT: {created_at}\nPOST_TEXT:\n{content}\n"
+                                       f"{'Check latest market data and TACO pattern history. ' if taco_mode else ''}"
+                                       f"Return analysis with trade recommendations."
+                                       f"{context_note}"
+                        }
+                    ],
+                )
+            except Exception as e:
+                print(f"[anthropic] request 2 failed (escalation): {e}", flush=True)
+                # Return decision from first pass if escalation fails
+                return decision
             
             used2 = _used_web_search_from_response(r2)
             print(f"[anthropic] request 2 done | web_used={bool(used2)}")
