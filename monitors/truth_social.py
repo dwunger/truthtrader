@@ -1,4 +1,4 @@
-import os, re, time, random, traceback, inspect, threading
+import os, re, time, random, traceback, inspect, threading, json
 from typing import Any, List, Optional
 from .base import Monitor
 from core.bus import Event
@@ -9,7 +9,7 @@ except Exception as e:
     tb = None
     print(f"[truthSocial] ERROR importing truthbrush: {e}", flush=True)
 
-VERSION = "truth_social/1.1.4"
+VERSION = "truth_social/2.0.0-haiku"
 print(f"[truthSocial] module file → {inspect.getfile(inspect.currentframe())}", flush=True)
 
 _CLOUDFLARE_STRINGS = ("Access denied | truthsocial.com used Cloudflare", "Error 1015")
@@ -51,26 +51,90 @@ class Monitor(Monitor):  # type: ignore[misc]
         if tb is None:
             raise RuntimeError("truthbrush module not available")
 
+        # Import Anthropic for Haiku screening
+        try:
+            from anthropic import Anthropic
+            self.anthropic = Anthropic(api_key=config["ANTHROPIC_API_KEY"])
+            self.enable_screening = os.getenv("TRUTH_SOCIAL_ENABLE_HAIKU_SCREENING", "1") != "0"
+        except Exception as e:
+            print(f"[truthSocial] WARNING: Anthropic not available, disabling screening: {e}", flush=True)
+            self.anthropic = None
+            self.enable_screening = False
+
         self.api = tb.Api()
         self.handle = config["TRUTH_HANDLE"]
         self.poll_seconds = max(30, int(os.getenv("TRUTH_SOCIAL_POLL_SECONDS", "90")))
+        self.screening_model = os.getenv("TRUTH_SOCIAL_SCREENING_MODEL", "claude-haiku-4-5-20251001")
         self.state = ctx.get("state")
         self.state_key_last = "truth_social:last_seen_id"
+        self.config = config  # Store for rate limit delay
+        
         try:
             self.publish_timeout_sec = int(os.getenv("PUBLISH_TIMEOUT_SEC", "25"))
         except Exception:
             self.publish_timeout_sec = 25
 
-        # Heartbeat controls:
-        # - TRUTH_SOCIAL_HEARTBEAT_SEC: cadence in seconds (default 0 = disabled)
-        # - TRUTH_SOCIAL_HEARTBEAT_PUSH: 1 to send pushover; 0 (default) for console-only logs
+        # Heartbeat controls
         try:
             self.heartbeat_sec = int(os.getenv("TRUTH_SOCIAL_HEARTBEAT_SEC", "0"))
         except Exception:
             self.heartbeat_sec = 0
         self.heartbeat_push = os.getenv("TRUTH_SOCIAL_HEARTBEAT_PUSH", "0").strip() not in ("0", "", "false", "False")
+        
+        print(f"[truthSocial] Haiku screening: {'ENABLED' if self.enable_screening else 'DISABLED'}", flush=True)
 
-    # ---- publish with timeout so we don't stall forever ----
+    def _screen_with_haiku(self, text: str) -> dict:
+        """
+        Use Haiku to screen if post is market-relevant.
+        Cost: ~$0.0001 per post
+        Returns: {"is_market_relevant": bool, "confidence": float, "reasoning": str}
+        """
+        if not self.enable_screening or not self.anthropic:
+            # Fallback: analyze everything
+            return {"is_market_relevant": True, "confidence": 1.0, "reasoning": "screening disabled"}
+        
+        try:
+            response = self.anthropic.messages.create(
+                model=self.screening_model,
+                max_tokens=200,
+                temperature=0,
+                system="You are a trading assistant screening social media posts. Identify if a post could impact financial markets. Respond with JSON only.",
+                messages=[{
+                    "role": "user",
+                    "content": f'''Is this post market-relevant for trading? Consider:
+- Trade policy, tariffs, regulations
+- Company mentions (Tesla, Apple, etc.)
+- Economic policy, Fed, taxes
+- Major political events affecting markets
+
+Skip: judge nominations, routine endorsements, celebrations, statistics without market impact.
+
+Respond JSON: {{"is_market_relevant": true/false, "confidence": 0.0-1.0, "reasoning": "brief explanation"}}
+
+Post: {text[:500]}'''
+                }]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in response.content:
+                if hasattr(block, 'type') and block.type == 'text':
+                    response_text += block.text
+            
+            # Parse JSON
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                response_text = re.sub(r"^```[a-zA-Z]*\s*", "", response_text)
+                response_text = re.sub(r"\s*```$", "", response_text)
+            
+            result = json.loads(response_text)
+            return result
+        except Exception as e:
+            print(f"[truthSocial] Haiku screening error: {e}", flush=True)
+            # Fallback: analyze everything (safe default)
+            return {"is_market_relevant": True, "confidence": 0.5, "reasoning": "screening failed"}
+
+    # ---- publish with timeout ----
     def _publish_with_timeout(self, evt: Event) -> bool:
         done = threading.Event()
         err: list[BaseException] = []
@@ -130,23 +194,60 @@ class Monitor(Monitor):  # type: ignore[misc]
             preview = preview[:117] + "…"
         print(f"[post:truthSocial] {sid} | {preview or '(media-only)'}", flush=True)
 
-        analyze_flag = bool(text)
-        payload = {"analyze": analyze_flag}
-        if analyze_flag:
-            payload["text"] = text
+        # Media-only posts: skip analysis
+        if not text:
+            print(f"[truthSocial] media-only post, skipping analysis", flush=True)
+            evt = Event(
+                source=self.name,
+                title="TruthTrader — update",
+                message="Media-only post (no text). No trade signal.",
+                url=url,
+                created_at=created_at,
+                priority=0,
+                payload={"analyze": False}
+            )
+            self._publish_with_timeout(evt)
+            return
 
-        evt = Event(
-            source=self.name,
-            title="TruthTrader — update",
-            message="Media-only post (no text). No trade signal." if not analyze_flag else "Analyzing post…",
-            url=url,
-            created_at=created_at,
-            priority=0,
-            payload=payload,
-        )
-        print("[truthSocial] publish → begin", flush=True)
-        ok = self._publish_with_timeout(evt)
-        print(f"[truthSocial] publish → {'done' if ok else 'timed out'}", flush=True)
+        # Screen with Haiku
+        print(f"[truthSocial] screening with {self.screening_model}...", flush=True)
+        screen_result = self._screen_with_haiku(text)
+        
+        if screen_result["is_market_relevant"] and screen_result["confidence"] > 0.6:
+            print(f"[truthSocial] ✓ MARKET-RELEVANT (conf={screen_result['confidence']:.2f}) → analyzing with Sonnet", flush=True)
+            print(f"[truthSocial]   reasoning: {screen_result['reasoning']}", flush=True)
+            
+            evt = Event(
+                source=self.name,
+                title="TruthTrader — update",
+                message="Analyzing market-relevant post...",
+                url=url,
+                created_at=created_at,
+                priority=0,
+                payload={
+                    "analyze": True,
+                    "text": text,
+                    "taco_mode": False,
+                    "pre_screened": True,  # Already screened by Haiku
+                    "screen_confidence": screen_result["confidence"],
+                }
+            )
+        else:
+            print(f"[truthSocial] ✗ not market-relevant (conf={screen_result['confidence']:.2f}), skipping analysis", flush=True)
+            print(f"[truthSocial]   reasoning: {screen_result['reasoning']}", flush=True)
+            
+            # Still send notification, but skip expensive Sonnet analysis
+            evt = Event(
+                source=self.name,
+                title="TruthTrader — update (not analyzed)",
+                message=f"Post not market-relevant (Haiku conf={screen_result['confidence']:.2f}):\n{text[:200]}...\n\nSkipped analysis to save tokens.",
+                url=url,
+                created_at=created_at,
+                priority=0,
+                payload={"analyze": False}
+            )
+        
+        self._publish_with_timeout(evt)
 
     def run(self) -> None:
         print(f"[truthSocial] RUN START — {VERSION}", flush=True)
@@ -183,11 +284,21 @@ class Monitor(Monitor):  # type: ignore[misc]
 
                 if new_posts:
                     print(f"[truthSocial] poll tick — new={len(new_posts)} (publishing oldest→newest)", flush=True)
+                    
+                    # Get rate limit delay from config
+                    post_delay = self.config.get("POST_PROCESS_DELAY", 2.0)
+                    
                     for post in reversed(new_posts):
                         try:
                             self._publish_post(post)
+                            
+                            # Add delay between posts
+                            if post_delay > 0:
+                                print(f"[truthSocial] rate limit protection: waiting {post_delay}s", flush=True)
+                                time.sleep(post_delay)
                         except Exception as pe:
                             _safe_print_exc("publish_post error", pe)
+                        
                         pid = post.get("id")
                         if pid and (not last_seen or pid > last_seen):
                             last_seen = pid
@@ -199,7 +310,7 @@ class Monitor(Monitor):  # type: ignore[misc]
                 else:
                     print(f"[truthSocial] poll tick — new=0 last_seen={last_seen}", flush=True)
 
-                # Heartbeat: console-only by default; no push unless explicitly enabled
+                # Heartbeat
                 now = time.time()
                 if now >= next_heartbeat_ts:
                     if self.heartbeat_push:
