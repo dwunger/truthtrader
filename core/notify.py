@@ -68,3 +68,4 @@ def notify_pushover(title: str, message: str, priority: int = 0, token: str = No
                     print(f"[notify] User must acknowledge within {expire}s or it will expire")
             except Exception:
                 pass
+
