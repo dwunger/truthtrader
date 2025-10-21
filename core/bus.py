@@ -1,5 +1,6 @@
 # core/bus.py
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
@@ -18,8 +19,36 @@ class Event:
 
 def make_publisher(cfg, state):
     analyzer = Analyzer(cfg, state.get("search_budget", default={}))
+    
+    def _build_quick_signal(decision: Dict[str, Any]) -> str:
+        """Build ultra-compact signal for TACO emergency notifications."""
+        parts = []
+        
+        tickers = decision.get("tickers", [])
+        if not tickers:
+            return "Signal generated - check details notification"
+        
+        for t in tickers:
+            action = t.get("action", "HOLD")
+            symbol = t.get("symbol", "?")
+            
+            # Compact format
+            line = f"{symbol}: {action}"
+            if t.get("strike"):
+                line += f" @ ${t['strike']}"
+            if t.get("expiration"):
+                line += f" ({t['expiration']})"
+            parts.append(line)
+            
+            # Critical timing
+            if t.get("entry_timing"):
+                parts.append(f"Entry: {t['entry_timing']}")
+            if t.get("exit_timing"):
+                parts.append(f"Exit: {t['exit_timing']}")
+        
+        return "\n".join(parts)
 
-    def _send_async(title: str, message: str, priority: int) -> None:
+    def _send_async(title: str, message: str, priority: int, url: str = None) -> None:
         def _worker():
             try:
                 # Priority 2 (emergency) for TACO trades: retry every 30s for 60 minutes
@@ -31,6 +60,11 @@ def make_publisher(cfg, state):
                     "token": cfg["PUSHOVER_TOKEN"],
                     "user": cfg["PUSHOVER_USER"],
                 }
+                
+                # Add URL for "View Full Post" button
+                if url:
+                    kwargs["url"] = url
+                    kwargs["url_title"] = "View Full Post"
                 
                 if priority == 2:
                     kwargs["retry_interval"] = 30  # Pushover min is 30s (requested 10s but API requires 30s)
@@ -92,9 +126,30 @@ def make_publisher(cfg, state):
                 summary = summarize_trade(decision)
                 prefix = f"{evt.url}\n\n" if evt.url else ""
                 final_message = prefix + summary
-
-            # Async notify so we never block the monitor loop
-            _send_async(evt.title, final_message, evt.priority)
+            
+            # For TACO priority 2: Send quick signal first, then detailed analysis
+            if taco_mode and evt.priority >= 2 and decision and decision.get("tickers"):
+                # FIRST: Quick actionable signal (emergency, repeating)
+                quick_signal = self._build_quick_signal(decision)
+                _send_async(
+                    title="🚨 TACO EMERGENCY",
+                    message=quick_signal,
+                    priority=2,
+                    url=evt.url
+                )
+                
+                # SECOND: Detailed analysis (normal priority, separate notification)
+                # Wait 2 seconds to avoid rate limit
+                time.sleep(2)
+                _send_async(
+                    title="TACO Analysis - Details",
+                    message=final_message,
+                    priority=0,
+                    url=evt.url
+                )
+            else:
+                # Standard single notification
+                _send_async(evt.title, final_message, evt.priority, evt.url)
 
             # Persist analyzer budget back to state **only if we analyzed**
             if analyze_flag and text:

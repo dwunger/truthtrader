@@ -24,45 +24,84 @@ def _json_load_lenient(raw: str) -> dict:
         raise
 
 def summarize_trade(decision: Dict[str, Any]) -> str:
-    parts = [
-        f"Sentiment: {decision.get('sentiment')} (conf {decision.get('confidence')})",
-        decision.get("analysis", ""),
-    ]
+    """
+    Smart truncation: Prioritize actionable info, fit within 1024 chars.
+    Returns message optimized for Pushover display.
+    """
+    parts = []
+    
+    # PRIORITY 1: TRADING SIGNALS (most critical, always show)
     tix = decision.get("tickers", []) or []
     if tix:
-        parts.append("\n🎯 OPTIONS SIGNALS:")
+        parts.append("🎯 SIGNALS:")
         for t in tix:
             action = t.get('action', 'HOLD')
             symbol = t.get('symbol', '?')
-            strike = t.get('strike', '')
-            expiration = t.get('expiration', '')
-            entry = t.get('entry_timing', '')
-            exit_timing = t.get('exit_timing', '')
-            rationale = t.get('rationale', '')
             
+            # Compact format for options
             signal_line = f"- {symbol}: {action}"
-            if strike:
-                signal_line += f" @ ${strike}"
-            if expiration:
-                signal_line += f" ({expiration})"
+            if t.get('strike'):
+                signal_line += f" @ ${t['strike']}"
+            if t.get('expiration'):
+                signal_line += f" ({t['expiration']})"
             parts.append(signal_line)
             
-            if entry:
-                parts.append(f"  Entry: {entry}")
-            if exit_timing:
-                parts.append(f"  Exit: {exit_timing}")
+            # Entry/exit timing (critical for options)
+            if t.get('entry_timing'):
+                parts.append(f"  Entry: {t['entry_timing']}")
+            if t.get('exit_timing'):
+                parts.append(f"  Exit: {t['exit_timing']}")
+            
+            # Rationale (truncate to 100 chars)
+            rationale = t.get('rationale', '')
             if rationale:
-                parts.append(f"  {rationale}")
+                parts.append(f"  {rationale[:100]}{'...' if len(rationale) > 100 else ''}")
+        
+        parts.append("")  # Blank line separator
     else:
-        parts.append("\nNo trade suggested.")
+        parts.append("No trade suggested.")
+        parts.append("")
+    
+    # PRIORITY 2: SENTIMENT + CONFIDENCE (quick context)
+    sentiment = decision.get('sentiment', 'NEUTRAL')
+    confidence = decision.get('confidence', 0.0)
+    parts.append(f"📊 {sentiment} (conf {confidence:.2f})")
+    parts.append("")
+    
+    # PRIORITY 3: ANALYSIS (truncate aggressively if needed)
+    analysis = decision.get("analysis", "")
+    # Reserve ~600 chars for signals/sentiment, leave ~400 for analysis
+    max_analysis_len = 400
+    if len(analysis) > max_analysis_len:
+        # Try to truncate at sentence boundary
+        truncated = analysis[:max_analysis_len]
+        last_period = truncated.rfind('.')
+        if last_period > max_analysis_len - 100:  # If period is reasonably close
+            analysis = truncated[:last_period + 1] + ".."
+        else:
+            analysis = truncated + "..."
+    parts.append(analysis)
+    
+    # PRIORITY 4: SOURCES (limit to 2, truncate titles)
     srcs = decision.get("sources", []) or []
     if srcs:
         parts.append("\n📚 Sources:")
-        for s in srcs[:3]:
-            parts.append(f"* {s.get('title','source')} — {s.get('url','')}")
+        for s in srcs[:2]:  # Only show first 2
+            title = s.get('title', 'source')[:40]  # Max 40 chars
+            parts.append(f"* {title}")
+    
+    # PRIORITY 5: ESCALATION NOTICE (if used reasoning model)
     if decision.get("escalated"):
-        parts.append("\n(Used reasoning model for final decision)")
-    return "\n".join(p for p in parts if p)
+        parts.append("\n(Reasoning model)")
+    
+    # Build message
+    full_message = "\n".join(parts)
+    
+    # Final safety: Hard truncate at 980 chars (leave room for URL note)
+    if len(full_message) > 980:
+        full_message = full_message[:977] + "..."
+    
+    return full_message
 
 def _system_msg():
     return ("You are a cautious finance research assistant. Use the built-in web_search tool only when needed. "
