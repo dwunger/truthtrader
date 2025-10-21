@@ -35,6 +35,7 @@ class Monitor(Monitor):
         self.screening_model = os.getenv("TACO_SCREENING_MODEL", "claude-haiku-4-5-20251001")
         self.state = ctx.get("state")
         self.state_key_last = "taco:last_seen_id"
+        self.config = config  # Store config for rate limit delay
         
         print(f"[taco] initialized for @{self.handle} | poll={self.poll_seconds}s | screening={self.screening_model}", flush=True)
     
@@ -107,6 +108,39 @@ class Monitor(Monitor):
                 
                 if first_page:
                     latest = first_page[0]
+                    
+                    # Screen the latest post for tariffs
+                    raw = latest.get("content") or latest.get("text") or ""
+                    text = self._strip_html(raw)
+                    
+                    if text:
+                        print("[taco] bootstrap → screening latest post with Haiku", flush=True)
+                        screen_result = self._screen_with_haiku(text)
+                        
+                        if screen_result["is_tariff_related"] and screen_result["confidence"] > 0.6:
+                            url = latest.get("url") or f"https://truthsocial.com/@{self.handle}/{latest.get('id')}"
+                            created_at = latest.get("created_at") or ""
+                            
+                            print(f"[taco] bootstrap → ✓ TARIFF POST (conf={screen_result['confidence']:.2f})", flush=True)
+                            
+                            evt = Event(
+                                source=self.name,
+                                title="TACO Analysis",
+                                message="Analyzing tariff-related post with TACO pattern awareness...",
+                                url=url,
+                                created_at=created_at,
+                                priority=0,
+                                payload={
+                                    "analyze": True,
+                                    "text": text,
+                                    "taco_mode": True,
+                                    "screen_confidence": screen_result["confidence"],
+                                }
+                            )
+                            self.publish(evt)
+                        else:
+                            print(f"[taco] bootstrap → ✗ not tariff-related (conf={screen_result['confidence']:.2f})", flush=True)
+                    
                     last_seen = latest["id"]
                     self.state.set(last_seen, self.state_key_last)
                     print(f"[taco] bootstrap complete | set last_seen={last_seen}", flush=True)
@@ -136,6 +170,9 @@ class Monitor(Monitor):
                 
                 if new_posts:
                     print(f"[taco] found {len(new_posts)} new posts", flush=True)
+                    
+                    # Get rate limit delay from config
+                    post_delay = self.config.get("POST_PROCESS_DELAY", 2.0)
                     
                     for post in reversed(new_posts):
                         raw = post.get("content") or post.get("text") or ""
@@ -170,6 +207,11 @@ class Monitor(Monitor):
                                 }
                             )
                             self.publish(evt)
+                            
+                            # Add delay after publishing to avoid rate limits
+                            if post_delay > 0:
+                                print(f"[taco] rate limit protection: waiting {post_delay}s", flush=True)
+                                time.sleep(post_delay)
                         else:
                             print(f"[taco] ✗ not tariff-related (conf={screen_result['confidence']:.2f})", flush=True)
                         
