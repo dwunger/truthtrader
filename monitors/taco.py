@@ -151,11 +151,17 @@ class Monitor(Monitor):
         while True:
             try:
                 print("[taco] poll tick", flush=True)
-                
-                page_iter = self.api.pull_statuses(
-                    username=self.handle, replies=False, verbose=False,
-                    created_after=None, since_id=last_seen, pinned=False,
-                )
+
+                try:
+                    page_iter = self.api.pull_statuses(
+                        username=self.handle, replies=False, verbose=False,
+                        created_after=None, since_id=last_seen, pinned=False,
+                    )
+                except Exception as e:
+                    print(f"[taco] truthbrush fetch failed: {e}", flush=True)
+                    time.sleep(60)
+                    continue
+
                 
                 new_posts = []
                 for i, post in enumerate(page_iter):
